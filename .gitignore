@@ -11,4 +11,5 @@ temp
 
 # Export outputs
 export/
+workspaces/
 .DS_Store

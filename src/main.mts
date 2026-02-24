@@ -8,7 +8,7 @@
 
 import "dotenv/config";
 import { createInterface } from "node:readline/promises";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 
 import { getConfig } from "./lib/config.mts";
 import { fetchLoopData } from "./lib/loop-api.mts";
@@ -65,9 +65,9 @@ Options:
   -h, --help             Show this help message
 
 Examples:
-  npm start                          # interactive picker
-  npm start -- -w UFC                # export UFC workspace
-  npm start -- --all                 # export all workspaces
+  npm start                          # interactive picker  → workspaces/{slug}/
+  npm start -- -w UFC                # export UFC workspace → workspaces/ufc/
+  npm start -- --all                 # export all workspaces → workspaces/*/
   npm start -- -w UFC -n             # dry run
   npm start -- -w UFC -d 0           # no delay
   npm start -- --page "Client APIs"  # export single page
@@ -81,7 +81,7 @@ Examples:
 // ---------------------------------------------------------------------------
 
 const workspaceArg = flagValue("--workspace") || flagValue("-w");
-const outputDir = "export";
+const outputDir = "workspaces";
 const rawDelay = flagValue("--delay") || flagValue("-d");
 const delayMs = rawDelay !== undefined ? Number(rawDelay) : 50;
 if (!Number.isFinite(delayMs) || delayMs < 0) {
@@ -98,15 +98,19 @@ const dumpHtml = hasFlag("--dump-html");
 // Workspace selection
 // ---------------------------------------------------------------------------
 
-async function pickWorkspace(workspaces: Workspace[]): Promise<Workspace> {
+/** Returns the selected workspace, or `null` to signal "export all". */
+async function pickWorkspace(workspaces: Workspace[]): Promise<Workspace | null> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log("Select a workspace:");
+    console.log(`  0. Export all workspaces`);
     workspaces.forEach((ws, i) =>
       console.log(`  ${i + 1}. ${workspaceDisplayLabel(ws)}`),
     );
     const answer = await rl.question("Enter number: ");
-    const idx = Number.parseInt(answer, 10) - 1;
+    const num = Number.parseInt(answer, 10);
+    if (num === 0) return null;
+    const idx = num - 1;
     if (Number.isNaN(idx) || idx < 0 || idx >= workspaces.length)
       throw new Error("Invalid selection");
     return workspaces[idx];
@@ -140,10 +144,14 @@ async function exportWorkspace(
   loopData: Awaited<ReturnType<typeof fetchLoopData>>,
   workspace: Workspace,
   dir: string,
+  { forceClean = false }: { forceClean?: boolean } = {},
 ): Promise<ExportResult> {
   console.log(`\nWorkspace: ${workspaceDisplayLabel(workspace)}`);
   const flat = await fetchHierarchy(workspace);
-  if (!dryRun && !pageFilter) await rm(dir, { recursive: true, force: true });
+  if (!dryRun && !pageFilter) {
+    const dirExists = await stat(dir).then(() => true, () => false);
+    if (forceClean || dirExists) await rm(dir, { recursive: true, force: true });
+  }
   return exportMarkdown(loopData, workspace, flat, dir, { delayMs, dryRun, pageFilter, dumpHtml });
 }
 
@@ -179,19 +187,28 @@ async function main() {
     // --all: export every workspace into its own subdirectory
     for (const ws of workspaces) {
       const wsDir = `${outputDir}/${slugify(ws.title || ws.id)}`;
-      results.push(await exportWorkspace(loopData, ws, wsDir));
+      results.push(await exportWorkspace(loopData, ws, wsDir, { forceClean: true }));
     }
   } else {
-    // Single workspace
-    let workspace: Workspace;
+    // Single workspace (or "all" chosen interactively)
+    let workspace: Workspace | undefined;
     if (workspaceArg) {
       workspace = findWorkspace(workspaces, workspaceArg);
     } else if (shouldPick || workspaces.length > 1) {
-      workspace = await pickWorkspace(workspaces);
+      const picked = await pickWorkspace(workspaces);
+      if (picked === null) {
+        for (const ws of workspaces) {
+          results.push(await exportWorkspace(loopData, ws, `${outputDir}/${slugify(ws.title || ws.id)}`, { forceClean: true }));
+        }
+      } else {
+        workspace = picked;
+      }
     } else {
       workspace = workspaces[0];
     }
-    results.push(await exportWorkspace(loopData, workspace, outputDir));
+    if (workspace) {
+      results.push(await exportWorkspace(loopData, workspace, `${outputDir}/${slugify(workspace.title || workspace.id)}`));
+    }
   }
 
   // Aggregate results

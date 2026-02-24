@@ -23,27 +23,30 @@ SHAREPOINT_BEARER_TOKEN=Bearer eyJ0eXAi...
 ## Usage
 
 ```bash
-npm start                          # interactive workspace picker
-npm start -- -w UFC                # select workspace by name
-npm start -- -w UFC -o ./out       # custom output directory
+npm start                          # interactive picker → choose workspace or export all
+npm start -- -w UFC                # select workspace by name → workspaces/ufc/
+npm start -- --all                 # export all workspaces   → workspaces/*/
 npm start -- -w UFC -d 0           # no delay between requests
-npm start -- -w UFC -d 100 -o out  # combine flags
+npm start -- -n                    # dry run (shows what would be exported)
 ```
 
 This runs the full pipeline in a single command with no intermediate files:
 
 1. Fetches workspace & page metadata from the Loop API
 2. Fetches the Fluid snapshot and extracts the sidebar page hierarchy
-3. Downloads each page as HTML, converts to Markdown, writes to `export/`
+3. Downloads each page as HTML, converts to Markdown, writes to `workspaces/`
 
 Deleted pages and shared-with-me pages are automatically skipped.
 
 | Flag | Long form | Description | Default |
 |------|-----------|-------------|---------|
 | `-w` | `--workspace` | Select workspace by name or ID | interactive picker |
+| `-a` | `--all` | Export all workspaces | off |
 | `-p` | `--pick-workspace` | Force interactive workspace picker | off |
-| `-o` | `--output` | Output directory | `export` |
 | `-d` | `--delay` | Delay (ms) between page requests | `50` |
+| `-n` | `--dry-run` | Show what would be exported without fetching | off |
+
+The interactive picker (shown when no flags are given, or with `-p`) includes an **"Export all workspaces"** option at position `0`.
 
 ## Getting tokens
 
@@ -69,19 +72,24 @@ Both tokens are short-lived OAuth Bearer tokens that you capture from your brows
 
 ## Output structure
 
+All output goes under `workspaces/`, with each workspace in its own subdirectory — even when only one workspace is exported.
+
 ```
-export/
-├── team-life/
-│   ├── _index.md
-│   ├── daily-responsibilities.md
-├── meeting-notes/
-│   ├── _index.md
-│   ├── 2025-q2/
-│   │   ├── _index.md
-│   │   └── 2025-04-23.md
-│   └── ...
-└── ...
+workspaces/
+└── my-workspace/          ← slugified workspace name
+    ├── team-life/
+    │   ├── _index.md
+    │   ├── daily-responsibilities.md
+    ├── meeting-notes/
+    │   ├── _index.md
+    │   ├── 2025-q2/
+    │   │   ├── _index.md
+    │   │   └── 2025-04-23.md
+    │   └── ...
+    └── ...
 ```
 
 - Section pages (with children) → `folder/_index.md`
 - Leaf pages → `folder/slugified-title.md`
+
+Re-running an export clears the workspace subdirectory before writing. Exporting a workspace for the first time into a fresh directory skips the clear.

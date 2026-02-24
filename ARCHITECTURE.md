@@ -155,13 +155,24 @@ src/
     └── export.mts         Step 3: HTML fetch → Turndown → .md files
 ```
 
+## Output directory
+
+All exports write to `workspaces/`, with each workspace in its own slugified subdirectory:
+
+```
+workspaces/{slug}/     ← single workspace
+workspaces/*/          ← --all or picker "0"
+```
+
+A workspace directory is cleared before re-export only if it already exists (re-export) or if `--all` / "Export all" was used. A first-time export to a new directory skips the clear.
+
 ## CLI flags
 
 | Flag | Description |
 |---|---|
 | `-w, --workspace NAME` | Select workspace by name or ID (also accepts "Personal workspace") |
-| `-a, --all` | Export all workspaces into subdirectories |
-| `-p, --pick-workspace` | Interactive numbered picker |
+| `-a, --all` | Export all workspaces, each into `workspaces/{slug}/` |
+| `-p, --pick-workspace` | Interactive numbered picker (option `0` exports all workspaces) |
 | `--page TITLE` | Export a single page by substring match |
 | `--dump-html` | Save raw HTML alongside markdown |
 | `-d, --delay MS` | Delay between page requests (default: 50) |
