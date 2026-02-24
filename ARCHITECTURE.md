@@ -107,13 +107,17 @@ Each Loop workspace is backed by a Fluid Framework container stored in SharePoin
 
 ## Step 3 — Page HTML export
 
-For each non-deleted, non-shared page in the selected workspace:
+Pages are exported from two sources, processed in order:
+
+**Primary — Loop API pages:** every non-deleted, non-shared page returned by Step 1 that belongs to the selected workspace.
+
+**Secondary — orphan hierarchy pages:** pages present in the Fluid hierarchy (Step 2) but absent from the Loop API (e.g. due to API pagination limits or sync lag). These are fetched using host + driveId inferred from a known page in the same workspace, falling back to the workspace `pod_id` coordinates if no known pages exist.
 
 **Endpoint:** `GET https://{spHost}/_api/v2.0/drives/{driveId}/items/{itemId}/content?format=html&ump=1`
 
-- `spHost` is derived from the page's `sharepoint_info.site_url`
-- `driveId` comes from `onedrive_info.drive_id`
-- `itemId` is extracted from the Loop page ID (the segment after the last `_`)
+- `spHost` is derived from the page's `sharepoint_info.site_url` (primary), or from the workspace pod_id host (orphans)
+- `driveId` comes from `onedrive_info.drive_id` (primary), or from the workspace pod_id (orphans)
+- `itemId` is extracted from the Loop page ID (the segment after the last `_`) for primary pages, or directly from the hierarchy's `odspMetadata.itemId` for orphans
 
 **Auth:** Same SharePoint multipart POST convention.
 

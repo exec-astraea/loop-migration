@@ -4,7 +4,7 @@ import TurndownService from "turndown";
 import { tables } from "turndown-plugin-gfm";
 
 import { spGet } from "./sharepoint.mts";
-import { slugify } from "./hierarchy.mts";
+import { slugify, decodePodId } from "./hierarchy.mts";
 import type { LoopData, LoopPage, Workspace, FlatEntry, ExportResult } from "./types.mts";
 
 // ---------------------------------------------------------------------------
@@ -229,18 +229,31 @@ export async function exportMarkdown(
     pages = pages.filter((p) =>
       (p.title || "").toLowerCase().includes(norm),
     );
-    if (pages.length === 0) {
-      console.error(`No pages matching "${pageFilter}" in workspace "${workspace.title}".`);
-      return { exported: 0, skipped: 0, skippedPages: [] };
-    }
   }
 
   const pathMap = buildPathMap(flat);
   const td = dryRun ? null : createTurndown();
   const usedNames = new Map<string, Set<string>>();
 
+  // Hierarchy entries with no matching Loop API page — will be exported after the main loop.
+  const processedSpoIds = new Set(pages.map(p => extractItemId(p.id) ?? "").filter(Boolean));
+  const orphans = flat.filter(e => {
+    if (!e.spoItemId || processedSpoIds.has(e.spoItemId)) return false;
+    if (pageFilter) {
+      const norm = pageFilter.toLowerCase();
+      return (e.title || "").toLowerCase().includes(norm);
+    }
+    return true;
+  });
+
+  if (pageFilter && pages.length === 0 && orphans.length === 0) {
+    console.error(`No pages matching "${pageFilter}" in workspace "${workspace.title}".`);
+    return { exported: 0, skipped: 0, skippedPages: [] };
+  }
+
+  const total = pages.length + orphans.length;
   const mode = dryRun ? "Dry run" : "Exporting";
-  console.log(`${mode}: ${pages.length} pages → ${outputDir}/\n`);
+  console.log(`${mode}: ${total} pages → ${outputDir}/\n`);
   if (!dryRun) await mkdir(outputDir, { recursive: true });
 
   let exported = 0;
@@ -276,7 +289,7 @@ export async function exportMarkdown(
     }
 
     await mkdir(dir, { recursive: true });
-    process.stdout.write(`[${i + 1}/${pages.length}] ${title}...`);
+    process.stdout.write(`[${i + 1}/${total}] ${title}...`);
 
     const html = await fetchPageHtml(page);
     if (!html) {
@@ -297,6 +310,89 @@ export async function exportMarkdown(
 
     if (delayMs > 0 && i < pages.length - 1)
       await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  // --- Orphan hierarchy pages ---
+  // Pages present in the Fluid hierarchy but absent from the Loop API.
+  // We infer host + driveId from a known page in this workspace (most reliable),
+  // falling back to the workspace pod_id if no known pages exist.
+  if (orphans.length > 0) {
+    let fallbackHost: string | undefined;
+    let fallbackDriveId: string | undefined;
+    for (const p of pages) {
+      const h = extractSpHost(p);
+      const d = p.onedrive_info?.drive_id;
+      if (h && d) { fallbackHost = h; fallbackDriveId = d; break; }
+    }
+    if (!fallbackHost || !fallbackDriveId) {
+      const podId = workspace.mfs_info?.pod_id;
+      if (podId) {
+        try {
+          const pod = decodePodId(podId);
+          fallbackHost = `https://${pod.host}`;
+          fallbackDriveId = pod.driveId;
+        } catch { /* ignore */ }
+      }
+    }
+
+    for (let j = 0; j < orphans.length; j++) {
+      const entry = orphans[j];
+      const title = entry.title.trim();
+      const idx = pages.length + j;
+
+      const treeEntry = pathMap.get(entry.spoItemId!);
+      let dir: string;
+      let filename: string;
+      if (treeEntry) {
+        dir = treeEntry.dir ? `${outputDir}/${treeEntry.dir}` : outputDir;
+        filename = treeEntry.isSection ? "_index.md" : `${fileSlug(title)}.md`;
+      } else {
+        dir = outputDir;
+        filename = `${fileSlug(title || "untitled")}.md`;
+      }
+      filename = dedupeFilename(dir, filename, usedNames);
+      const relPath = dir === outputDir ? filename : `${dir.slice(outputDir.length + 1)}/${filename}`;
+
+      if (dryRun) {
+        console.log(`  ${relPath}`);
+        exported++;
+        continue;
+      }
+
+      await mkdir(dir, { recursive: true });
+      process.stdout.write(`[${idx + 1}/${total}] ${title}...`);
+
+      if (!fallbackHost || !fallbackDriveId || !entry.spoItemId) {
+        skipped++;
+        skippedPages.push(title);
+        console.log(" skipped (not in Loop API, no fallback info)");
+        continue;
+      }
+
+      const url = `${fallbackHost}/_api/v2.0/drives/${fallbackDriveId}/items/${entry.spoItemId}/content?format=html&ump=1`;
+      const res = await spGet(url);
+      if (!res.ok) {
+        const t = await res.text();
+        console.error(`  [SKIP] HTTP ${res.status} for "${title}" — ${t.slice(0, 120)}`);
+        skipped++;
+        skippedPages.push(title);
+        console.log(" skipped");
+        continue;
+      }
+      const html = await res.text();
+
+      const md = `# ${title}\n\n${td!.turndown(html)}`;
+      await writeFile(`${dir}/${filename}`, md, "utf8");
+      if (dumpHtml) {
+        const htmlFile = filename.replace(/\.md$/, ".html");
+        await writeFile(`${dir}/${htmlFile}`, html, "utf8");
+      }
+      exported++;
+      console.log(` → ${relPath} (${md.length} chars)`);
+
+      if (delayMs > 0 && j < orphans.length - 1)
+        await new Promise((r) => setTimeout(r, delayMs));
+    }
   }
 
   console.log(`\nDone: ${exported} exported, ${skipped} skipped`);
