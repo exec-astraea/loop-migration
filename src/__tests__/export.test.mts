@@ -5,6 +5,7 @@ import {
   fileSlug,
   buildPathMap,
   dedupeFilename,
+  createTurndown,
 } from "../lib/export.mts";
 import type { LoopPage, FlatEntry } from "../lib/types.mts";
 
@@ -134,5 +135,61 @@ describe("dedupeFilename", () => {
     const used = new Map<string, Set<string>>();
     dedupeFilename("/out", "_index.md", used);
     expect(dedupeFilename("/out", "_index.md", used)).toBe("_index-2.md");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createTurndown — loopComment rule
+// ---------------------------------------------------------------------------
+
+function commentHtml(replies: Array<{ author: string; datetime: string; body: string }>) {
+  const articles = replies.map(({ author, datetime, body }) => `
+    <article>
+      <address><a href="mailto:x@x.com">${author}</a></address>
+      <div><time datetime="${datetime}">ignored text</time></div>
+      <div><div><span>${body}</span></div></div>
+    </article>`).join("");
+  return `<div data-docparser-context="comment">${articles}</div>`;
+}
+
+describe("createTurndown loopComment rule", () => {
+  it("renders author and date as a blockquote header", () => {
+    const td = createTurndown();
+    const md = td.turndown(commentHtml([
+      { author: "Alice", datetime: "2024-03-15T10:00:00.000Z", body: "Nice work" },
+    ]));
+    expect(md).toContain("> **Alice** · *Mar 15, 2024*");
+  });
+
+  it("renders the comment body prefixed with >", () => {
+    const td = createTurndown();
+    const md = td.turndown(commentHtml([
+      { author: "Alice", datetime: "2024-01-23T15:13:41.890Z", body: "Hello world" },
+    ]));
+    expect(md).toContain("> Hello world");
+  });
+
+  it("renders multiple replies as separate blockquotes", () => {
+    const td = createTurndown();
+    const md = td.turndown(commentHtml([
+      { author: "Alice", datetime: "2024-01-01T00:00:00.000Z", body: "First" },
+      { author: "Bob",   datetime: "2024-06-30T00:00:00.000Z", body: "Second" },
+    ]));
+    expect(md).toContain("> **Alice** · *Jan 1, 2024*");
+    expect(md).toContain("> **Bob** · *Jun 30, 2024*");
+  });
+
+  it("falls back gracefully when datetime attribute is missing", () => {
+    const td = createTurndown();
+    const html = `<div data-docparser-context="comment">
+      <article>
+        <address><a href="mailto:x@x.com">Charlie</a></address>
+        <div><time>Mar 15, 2024</time></div>
+        <div><span>Body text</span></div>
+      </article>
+    </div>`;
+    const md = td.turndown(html);
+    expect(md).toContain("> **Charlie**");
+    expect(md).toContain("> Body text");
   });
 });

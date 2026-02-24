@@ -46,7 +46,7 @@ async function fetchPageHtml(page: LoopPage): Promise<string | null> {
 // Turndown (HTML → Markdown)
 // ---------------------------------------------------------------------------
 
-function createTurndown() {
+export function createTurndown() {
   const td = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
@@ -134,6 +134,57 @@ function createTurndown() {
     filter: ["del", "s"],
     replacement(content: string) {
       return `~~${content}~~`;
+    },
+  });
+
+  // Loop inline comment threads.
+  // HTML: <div data-docparser-context="comment">
+  //         <article>
+  //           <address><a href="mailto:…">Author</a></address>
+  //           <div><time datetime="ISO">…</time></div>
+  //           <div>…body…</div>
+  //         </article>
+  //         …more <article>s…
+  //       </div>
+  td.addRule("loopComment", {
+    filter(node: HTMLElement) {
+      return (
+        node.nodeName === "DIV" &&
+        node.getAttribute("data-docparser-context") === "comment"
+      );
+    },
+    replacement(_content: string, node: HTMLElement) {
+      const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const articles = Array.from(node.children).filter(
+        (el) => el.nodeName === "ARTICLE",
+      );
+      if (articles.length === 0) return "";
+
+      const parts = articles.map((article) => {
+        const author = (article.querySelector("address a")?.textContent ?? "Unknown").trim();
+
+        const timeEl = article.querySelector("time");
+        const dtAttr = timeEl?.getAttribute("datetime") ?? "";
+        const dm = dtAttr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        const date = dm
+          ? `${MONTHS[+dm[2] - 1]} ${+dm[3]}, ${dm[1]}`
+          : (timeEl?.textContent ?? "").trim();
+
+        // Body is the last <div> child; the first <div> contains the <time>.
+        const divs = Array.from(article.children).filter((el) => el.nodeName === "DIV");
+        const bodyDiv = divs[divs.length - 1];
+        const body = (bodyDiv?.textContent ?? "")
+          .split(/\n+/)
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .map((l) => `> ${l}`)
+          .join("\n");
+
+        return `> **${author}** · *${date}*\n>\n${body}`;
+      });
+
+      return "\n\n" + parts.join("\n\n") + "\n\n";
     },
   });
 
