@@ -9,16 +9,30 @@ The tool exports Microsoft Loop workspaces to local Markdown files. It talks to 
 | **Loop API** | `substrate.office.com` | `LOOP_BEARER_TOKEN` | Workspace & page metadata |
 | **SharePoint API** | `*.sharepoint.com` | `SHAREPOINT_BEARER_TOKEN` | Fluid snapshots (hierarchy) and page HTML content |
 
+Both tokens are validated at startup by `getConfig()` (in `config.mts`), which reads from `.env` via dotenv and memoizes the result.
+
 ## Data flow
 
 ```
-Loop API                  SharePoint API (v2.1)          SharePoint API (v2.0)
-─────────                 ─────────────────────          ─────────────────────
+Loop API (v1.1)           SharePoint API (v2.1)          SharePoint API (v2.0)
+───────────────           ─────────────────────          ─────────────────────
   │                              │                              │
-  │  1. deltasync                │                              │
-  │  ──────────►                 │                              │
-  │  workspaces + pages          │                              │
-  │  (metadata only)             │                              │
+  │  1a. /workspaces             │                              │
+  │  ───────────────►            │                              │
+  │  canonical workspace list    │                              │
+  │  (incl. Personal workspace)  │                              │
+  │                              │                              │
+  │  1b. /recent                 │                              │
+  │  ───────────────►            │                              │
+  │  recently-active workspaces  │                              │
+  │  + pages                     │                              │
+  │                              │                              │
+  │  1c. /deltasync              │                              │
+  │  ───────────────►            │                              │
+  │  full component graph        │                              │
+  │  + pages                     │                              │
+  │                              │                              │
+  │  ── merge & deduplicate ──   │                              │
   │                              │                              │
   │                     2. opStream/snapshots                   │
   │                     ────────────────────►                   │
@@ -31,20 +45,40 @@ Loop API                  SharePoint API (v2.1)          SharePoint API (v2.0)
   │                                          → converted to Markdown
 ```
 
-## Step 1 — Loop delta-sync (metadata)
+## Step 1 — Loop workspace & page discovery
 
-**Endpoint:** `GET https://substrate.office.com/recommended/api/beta/loop/deltasync?loopComponents=true`
+No single Loop API endpoint returns all workspaces and pages. The tool queries **three** endpoints and merges the results, deduplicating by `id`:
 
-**Auth:** Standard `Authorization: Bearer {token}` header.
+### 1a. `/workspaces` — canonical workspace list
 
-**What it returns:** A JSON payload containing:
+**Endpoint:** `GET https://substrate.office.com/recommended/api/v1.1/loop/workspaces?rs=en-us`
+
+Returns the user's workspace list. This is the only endpoint that reliably includes the **Personal workspace** (titled "My workspace" by the API). It returns workspace metadata only — no pages.
+
+### 1b. `/recent` — recently-active workspaces + pages
+
+**Endpoint:** `GET https://substrate.office.com/recommended/api/v1.1/loop/recent?top=30&settings=true&rs=en-us`
+
+Returns workspaces and pages ordered by recent activity. Newly created workspaces typically appear here first. Capped at 30 items per request.
+
+### 1c. `/deltasync` — full component graph
+
+**Endpoint:** `GET https://substrate.office.com/recommended/api/v1.1/loop/deltasync?loopComponents=true&rs=en-us`
+
+Returns the full workspace + page + component graph. May include workspaces not touched recently. This is where the bulk of the page metadata comes from.
+
+### Merge logic
+
+All three responses share the same `LoopData` shape:
 - `workspaces[]` — each with an `id`, `title`, and `mfs_info.pod_id` (base64-encoded pointer to the SharePoint backing store)
 - `pages[]` — each with an `id`, `title`, `type`, `workspace_id`, `is_deleted`, `onedrive_info.drive_id`, and `sharepoint_info.site_url`
 - `activities[]` — not used by this tool
 
-**Pagination:** The response may include `next_page_link` (a query string) and `is_complete: false`. The tool follows these links, merging and deduplicating results by `id`, until the full dataset is collected.
+**Auth:** Standard `Authorization: Bearer {token}` header.
 
-**Key detail:** This step gives us page *metadata* but not the page *content* or *hierarchy* (folder structure). Those come from SharePoint.
+**Pagination:** Each response may include `next_page_link` (a query string). The tool follows these links, merging and deduplicating results by `id`, until no more links are returned.
+
+**Key detail:** This step gives us page *metadata* but not the page *content* or *hierarchy* (folder structure). Those come from SharePoint. Workspaces without `mfs_info.pod_id` are filtered out with a warning (they are typically empty or not yet synced to SharePoint).
 
 ## Step 2 — Fluid snapshot (hierarchy)
 
@@ -114,8 +148,22 @@ src/
 ├── main.mts              CLI entry point, arg parsing, orchestration
 └── lib/
     ├── types.mts          Shared interfaces (Workspace, LoopPage, LoopData, …)
-    ├── sharepoint.mts     SP multipart auth helper (spGet)
-    ├── loop-api.mts       Step 1: Loop delta-sync with pagination
+    ├── config.mts         Token validation & memoization (getConfig)
+    ├── sharepoint.mts     SP multipart auth helper (spGet) with retry + backoff
+    ├── loop-api.mts       Step 1: /workspaces + /recent + /deltasync with merge
     ├── hierarchy.mts      Step 2: Fluid snapshot → page tree → flat entries
     └── export.mts         Step 3: HTML fetch → Turndown → .md files
 ```
+
+## CLI flags
+
+| Flag | Description |
+|---|---|
+| `-w, --workspace NAME` | Select workspace by name or ID (also accepts "Personal workspace") |
+| `-a, --all` | Export all workspaces into subdirectories |
+| `-p, --pick-workspace` | Interactive numbered picker |
+| `--page TITLE` | Export a single page by substring match |
+| `--dump-html` | Save raw HTML alongside markdown |
+| `-d, --delay MS` | Delay between page requests (default: 50) |
+| `-n, --dry-run` | Show what would be exported without fetching |
+| `-h, --help` | Show help |
