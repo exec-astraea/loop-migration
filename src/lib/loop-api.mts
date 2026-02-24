@@ -75,8 +75,10 @@ export async function fetchLoopData(): Promise<LoopData> {
   let merged = page;
   let requests = 0;
 
-  while (page.next_page_link && page.is_complete !== true) {
-    if (visited.has(page.next_page_link)) throw new Error("Pagination loop");
+  // Always follow next_page_link if present — is_complete signals the overall
+  // sync is done, but pages within a single sync batch must still be fetched.
+  while (page.next_page_link) {
+    if (visited.has(page.next_page_link)) break; // cycle guard
     if (++requests >= MAX_PAGES) throw new Error("Pagination limit reached");
     visited.add(page.next_page_link);
     page = await fetchPage(page.next_page_link);
@@ -85,6 +87,6 @@ export async function fetchLoopData(): Promise<LoopData> {
 
   const ws = (merged.workspaces || []).length;
   const pg = (merged.pages || []).length;
-  console.log(`  ${ws} workspaces, ${pg} pages\n`);
+  console.log(`  ${ws} workspaces, ${pg} pages (${requests + 1} API requests)\n`);
   return merged;
 }

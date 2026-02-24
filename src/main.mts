@@ -144,9 +144,18 @@ async function main() {
 
   const loopData = await fetchLoopData();
 
-  const workspaces = (loopData.workspaces || []).filter(
+  const allWorkspaces = loopData.workspaces || [];
+  const workspaces = allWorkspaces.filter(
     (ws) => ws.mfs_info?.pod_id,
   );
+  if (workspaces.length < allWorkspaces.length) {
+    const skipped = allWorkspaces.filter((ws) => !ws.mfs_info?.pod_id);
+    const names = skipped.map((ws) => ws.title || ws.id).join(", ");
+    console.warn(
+      `Note: ${skipped.length} workspace(s) hidden (no SharePoint pod_id): ${names}\n` +
+      `  These may be empty or not yet synced to SharePoint.\n`,
+    );
+  }
   if (workspaces.length === 0) throw new Error("No workspaces with pod_id found");
 
   const results: ExportResult[] = [];
