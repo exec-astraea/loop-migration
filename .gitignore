@@ -1,0 +1,14 @@
+node_modules
+.env
+temp
+
+# Generated data
+*.bin
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Export outputs
+export/
+.DS_Store
