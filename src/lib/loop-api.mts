@@ -100,6 +100,15 @@ export async function fetchLoopData(): Promise<LoopData> {
   console.log("Fetching workspace data from Loop API...");
   const { loopToken } = getConfig();
 
+  // /workspaces returns the canonical workspace list and is where Personal
+  // workspace typically appears.
+  const canonical = await paginateAll(
+    "workspaces",
+    "rs=en-us",
+    loopToken,
+  );
+  const wsCanonical = (canonical.data.workspaces || []).length;
+
   // /recent surfaces workspaces ordered by activity — often includes ones
   // that deltasync misses (newly created, infrequently synced).
   const recent = await paginateAll(
@@ -118,14 +127,15 @@ export async function fetchLoopData(): Promise<LoopData> {
   );
   const wsDelta = (delta.data.workspaces || []).length;
 
-  const merged = mergeLoopData(recent.data, delta.data);
-  const totalRequests = recent.requests + delta.requests;
+  const mergedRecentDelta = mergeLoopData(recent.data, delta.data);
+  const merged = mergeLoopData(canonical.data, mergedRecentDelta);
+  const totalRequests = canonical.requests + recent.requests + delta.requests;
 
   const ws = (merged.workspaces || []).length;
   const pg = (merged.pages || []).length;
   console.log(`  ${ws} workspaces, ${pg} pages (${totalRequests} API requests)`);
-  if (wsRecent !== wsDelta) {
-    console.log(`  (recent: ${wsRecent}, deltasync: ${wsDelta} — merged)`);
+  if (wsCanonical !== wsRecent || wsRecent !== wsDelta) {
+    console.log(`  (workspaces: ${wsCanonical}, recent: ${wsRecent}, deltasync: ${wsDelta} — merged)`);
   }
   console.log();
   return merged;

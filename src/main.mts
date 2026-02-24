@@ -24,6 +24,17 @@ import type { ExportResult } from "./lib/types.mts";
 
 const args = process.argv.slice(2);
 
+function workspaceTitle(workspace: Workspace): string {
+  return workspace.title || "(untitled)";
+}
+
+function workspaceDisplayLabel(workspace: Workspace): string {
+  const title = workspaceTitle(workspace);
+  return title.trim().toLowerCase() === "my workspace"
+    ? "My workspace (Personal workspace)"
+    : title;
+}
+
 function hasFlag(name: string): boolean {
   return args.includes(name);
 }
@@ -92,7 +103,7 @@ async function pickWorkspace(workspaces: Workspace[]): Promise<Workspace> {
   try {
     console.log("Select a workspace:");
     workspaces.forEach((ws, i) =>
-      console.log(`  ${i + 1}. ${ws.title || "(untitled)"}`),
+      console.log(`  ${i + 1}. ${workspaceDisplayLabel(ws)}`),
     );
     const answer = await rl.question("Enter number: ");
     const idx = Number.parseInt(answer, 10) - 1;
@@ -109,7 +120,11 @@ function findWorkspace(workspaces: Workspace[], nameOrId: string): Workspace {
   if (exact) return exact;
   const norm = nameOrId.trim().toLowerCase();
   const matches = workspaces.filter(
-    (ws) => (ws.title || "").trim().toLowerCase() === norm,
+    (ws) => {
+      const title = (ws.title || "").trim().toLowerCase();
+      if (title === norm) return true;
+      return norm === "personal workspace" && title === "my workspace";
+    },
   );
   if (matches.length === 1) return matches[0];
   if (matches.length > 1)
@@ -126,7 +141,7 @@ async function exportWorkspace(
   workspace: Workspace,
   dir: string,
 ): Promise<ExportResult> {
-  console.log(`\nWorkspace: ${workspace.title || workspace.id}`);
+  console.log(`\nWorkspace: ${workspaceDisplayLabel(workspace)}`);
   const flat = await fetchHierarchy(workspace);
   if (!dryRun && !pageFilter) await rm(dir, { recursive: true, force: true });
   return exportMarkdown(loopData, workspace, flat, dir, { delayMs, dryRun, pageFilter, dumpHtml });
